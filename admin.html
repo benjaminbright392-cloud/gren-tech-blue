@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Admin | Green Tech Empire</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="topbar">
+  <a class="logo" href="index.html">GREEN TECH <span>EMPIRE</span> admin</a>
+  <div class="account"><span id="who" class="muted"></span><button id="logout" class="btn btn-small btn-ghost" hidden>Log out</button></div>
+</header>
+<main class="section">
+  <h2>Pending payments</h2>
+  <p id="gate" class="status">Checking sign-in...</p>
+  <div id="panel" hidden>
+    <div id="pending" class="orders"></div>
+  </div>
+</main>
+
+<script type="module">
+  import { initializeApp, getApps, getApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+  import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+  import { getFirestore, collection, query, where, onSnapshot, doc, updateDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+  import { firebaseConfig, ADMIN_EMAIL } from "./js/config.js";
+
+  const gate = document.getElementById("gate");
+  const panel = document.getElementById("panel");
+  const pendingEl = document.getElementById("pending");
+  const who = document.getElementById("who");
+  const logoutBtn = document.getElementById("logout");
+
+  if (firebaseConfig.apiKey.startsWith("PASTE_")) {
+    gate.textContent = "Add your Firebase keys in js/config.js first (see README).";
+    gate.className = "status error";
+  } else {
+    const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const db = getFirestore(app);
+    let unsub = () => {};
+
+    onAuthStateChanged(auth, user => {
+      unsub();
+      panel.hidden = true;
+      logoutBtn.hidden = !user;
+      who.textContent = user ? user.email : "";
+      if (!user) {
+        gate.className = "status";
+        gate.innerHTML = `Sign in with the shop owner account to continue.
+          <form id="admin-login" class="card-form" style="margin-top:1rem">
+            <label>Email <input name="email" type="email" required></label>
+            <label>Password <input name="password" type="password" required></label>
+            <button class="btn" type="submit">Sign in</button>
+            <p id="login-err" class="status"></p>
+          </form>`;
+        document.getElementById("admin-login").addEventListener("submit", async e => {
+          e.preventDefault();
+          const { email, password } = Object.fromEntries(new FormData(e.target));
+          try { await signInWithEmailAndPassword(auth, email.trim(), password); }
+          catch { document.getElementById("login-err").textContent = "Sign-in failed."; }
+        });
+        return;
+      }
+      if (user.email !== ADMIN_EMAIL || !user.emailVerified) {
+        gate.className = "status error";
+        gate.textContent = "This account is not authorised to view admin. Sign out and use the owner account.";
+        return;
+      }
+      gate.textContent = "";
+      panel.hidden = false;
+      const q = query(collection(db, "orders"), where("status", "==", "pending"));
+      unsub = onSnapshot(q, snap => {
+        const rows = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        if (!rows.length) { pendingEl.innerHTML = `<p class="muted">No pending orders.</p>`; return; }
+        pendingEl.innerHTML = rows.map(o => `
+          <div class="order" data-id="${o.id}">
+            <div>
+              <strong>${o.productName}</strong> · NGN ${Number(o.amount).toLocaleString("en-NG")}<br>
+              <span class="muted">${o.name} · ${o.email} · Ref ${o.reference}</span><br>
+              <span class="muted" style="font-size:.75rem">hash ${o.hash.slice(0, 16)}...</span>
+            </div>
+            <button class="btn btn-small" data-verify="${o.id}">Mark verified</button>
+          </div>`).join("");
+      });
+    });
+
+    pendingEl.addEventListener("click", async e => {
+      const btn = e.target.closest("[data-verify]");
+      if (!btn) return;
+      if (!confirm("Confirm you have received this transfer in your bank account?")) return;
+      btn.disabled = true;
+      await updateDoc(doc(db, "orders", btn.dataset.verify), {
+        status: "verified", verifiedAt: serverTimestamp(), verifiedBy: auth.currentUser.email
+      });
+    });
+
+    logoutBtn.addEventListener("click", () => signOut(auth));
+  }
+</script>
+</body>
+</html>
